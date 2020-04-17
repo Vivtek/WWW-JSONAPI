@@ -14,11 +14,11 @@ WWW::JSONAPI - Very thin and inadequate wrapper for JSON APIs
 
 =head1 VERSION
 
-Version 0.01
+Version 0.02
 
 =cut
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 
 =head1 SYNOPSIS
@@ -26,8 +26,6 @@ our $VERSION = '0.01';
 This module contains utterly minimal functionality for interacting with JSON-based REST services with or without SSL.
 It resulted from my development of L<WWW::KeePassRest>, and has the purpose of providing a very thin but convenient
 abstraction layer on top of LWP and JSON for that API. Other than those, it has no dependencies.
-Version 0.01 contains only those methods needed by WWW::KeePassRest, so really it shouldn't even be considered
-Version 0.01, but rather 0.00001 or so.
 
 For a more feature-rich JSON module, you'll probably want L<WWW::JSON>. Seriously. Anything but this one.
 
@@ -112,7 +110,9 @@ sub new {
 
 =cut
 
-sub ua { $_[0]->{ua} }
+sub ua  { $_[0]->{ua} }
+sub req { $_[0]->{q} }
+sub res { $_[0]->{r} }
 
 
 
@@ -123,6 +123,26 @@ sub ua { $_[0]->{ua} }
 sub _bad_retcode {
    my $self = shift;
    croak $self->{r}->status_line;
+}
+
+# --------------------------------
+# Cheap URL-encoding
+# --------------------------------
+
+sub _urlencode {
+   my $str = shift;
+   $str =~ s/([^^A-Za-z0-9\-_.!~*'()])/ sprintf "%%%0x", ord $1 /eg;   # https://stackoverflow.com/questions/4510550/using-perl-how-do-i-decode-or-create-those-encodings-on-the-web
+   $str;
+}
+sub _urlencode_hashref {
+   my $ref = shift;
+   my $p = '';
+   while (my ($k, $v) = each (%$ref)) {
+      $p .= _urlencode($k) . '=' . _urlencode($v);
+      $p .= '&';
+   }
+   $p =~ s/&$//;
+   $p;
 }
 
 =head2 json_POST_json
@@ -136,7 +156,25 @@ sub json_POST_json {
    my ($self, $url, $out) = @_;
    $self->{q} = HTTP::Request->new (POST => $self->{base_url} . $url, ['Content-Type' => 'application/json'], $self->{j}->encode($out));
    $self->{r} = $self->{ua}->request($self->{q});
-   return $self->_bad_retcode unless $self->{r}->is_success;
+   croak $self->{r}->status_line unless $self->{r}->is_success;
+   return $self->{j}->decode($self->{r}->content);
+}
+
+=head2 POST_json
+
+Does a POST request, taking a hashref of parameters to the POST and expecting JSON back, which it converts to
+a hashref for return to the caller. Differs from C<json_POST_json> in that instead of JSON-encoding the data sent,
+it uses a standard URLencoded form post.
+
+=cut
+
+sub POST_json {
+   my ($self, $url, $out) = @_;
+   my $p = _urlencode_hashref ($out);
+   my $len = length($p);
+   $self->{q} = HTTP::Request->new (POST => $self->{base_url} . $url, ['Content-Type' => 'application/x-www-form-urlencoded', ['Content-Length' => $len]], $p);
+   $self->{r} = $self->{ua}->request($self->{q});
+   croak $self->{r}->status_line unless $self->{r}->is_success;
    return $self->{j}->decode($self->{r}->content);
 }
 
@@ -150,7 +188,7 @@ sub json_POST_string {
    my ($self, $url, $out) = @_;
    $self->{q} = HTTP::Request->new (POST => $self->{base_url} . $url, ['Content-Type' => 'application/json'], $self->{j}->encode($out));
    $self->{r} = $self->{ua}->request($self->{q});
-   return $self->_bad_retcode unless $self->{r}->is_success;
+   croak $self->{r}->status_line unless $self->{r}->is_success;
    return $self->{r}->content;
 }
 
@@ -164,7 +202,7 @@ sub json_PUT_string {
    my ($self, $url, $out) = @_;
    $self->{q} = HTTP::Request->new (PUT => $self->{base_url} . $url, ['Content-Type' => 'application/json'], $self->{j}->encode($out));
    $self->{r} = $self->{ua}->request($self->{q});
-   return $self->_bad_retcode unless $self->{r}->is_success;
+   croak $self->{r}->status_line unless $self->{r}->is_success;
    return $self->{r}->content;
 }
 
@@ -172,13 +210,19 @@ sub json_PUT_string {
 
 Performs a GET request on the URL provided, interpreting the return as JSON and returning a hashref.
 
+If a hashref of parameters is also provided, they will be URL-encoded into the URL.
+
 =cut
 
 sub GET_json {
-   my ($self, $url) = @_;
-   $self->{q} = HTTP::Request->new (GET => $self->{base_url} . $url);
+   my ($self, $url, $parms) = @_;
+   my $p = '';
+   if (defined $parms) {
+      $p = '?' . _urlencode_hashref ($parms);
+   }
+   $self->{q} = HTTP::Request->new (GET => $self->{base_url} . $url . $p);
    $self->{r} = $self->{ua}->request($self->{q});
-   return $self->_bad_retcode unless $self->{r}->is_success;
+   croak $self->{r}->status_line unless $self->{r}->is_success;
    return $self->{j}->decode($self->{r}->content);
 }
 
@@ -192,7 +236,7 @@ sub DELETE_string {
    my ($self, $url) = @_;
    $self->{q} = HTTP::Request->new (DELETE => $self->{base_url} . $url);
    $self->{r} = $self->{ua}->request($self->{q});
-   return $self->_bad_retcode unless $self->{r}->is_success;
+   croak $self->{r}->status_line unless $self->{r}->is_success;
    return $self->{r}->content;
 }
 
